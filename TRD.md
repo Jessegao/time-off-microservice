@@ -89,81 +89,163 @@ Employee ─────┬───── Balance ────── TimeOffTyp
 
 ## 6. Core Business Logic
 
-### 6.1 Balance Checking (Defensive)
+### 6.1 Balance Calculation (Defensive)
 
-```typescript
-calculateEffectiveAvailable(balance: Balance): number {
-  // Always use local calculation, never trust HCM alone
-  return balance.availableDays - balance.pendingDays;
-}
-```
+**Purpose**: Provide accurate real-time balance information to employees without trusting HCM blindly.
+
+**How it works**:
+The system maintains a local `Balance` record for each employee-timeoff-type combination. This record tracks three separate buckets:
+- `availableDays`: Total allocated days minus used days
+- `pendingDays`: Days reserved by requests that are submitted but not yet approved
+- `usedDays`: Days from fully completed requests
+
+The effective available balance is calculated as: `availableDays - pendingDays`
+
+This calculation is **defensive** because:
+1. It uses local data for instant feedback (no network round-trip to HCM)
+2. Pending days are subtracted because those days are "reserved" even if not yet taken
+3. The HCM is not consulted for this calculation, preventing potential stale data issues
 
 ### 6.2 Request Submission with Pessimistic Locking
 
-```typescript
-@Transaction()
-async submitRequest(dto: CreateRequestDTO): Promise<TimeOffRequest> {
-  // Pessimistic lock prevents concurrent overdraft
-  const balance = await manager.findOne(Balance, {
-    where: { employeeId, timeOffTypeId },
-    lock: { mode: 'pessimistic_write' }  // SELECT FOR UPDATE
-  });
+**Purpose**: Prevent race conditions where two concurrent requests could overdraft an employee's balance.
 
-  const effectiveAvailable = this.calculateEffectiveAvailable(balance);
-  if (effectiveAvailable < dto.totalDays) {
-    throw new InsufficientBalanceError({...});
-  }
+**How it works**:
+When an employee submits a time-off request, the system:
 
-  // Atomically increment pending
-  await manager.increment(Balance, { id: balance.id }, 'pendingDays', dto.totalDays);
-  ...
-}
-```
+1. **Begins a database transaction** - All operations within the submission are atomic
+2. **Acquires a pessimistic write lock** on the balance row using `SELECT ... FOR UPDATE`
+   - This lock prevents any other transaction from reading or modifying the balance until the current transaction completes
+   - Other concurrent requests will wait until this lock is released
+3. **Validates the balance** - Checks if `effectiveAvailable >= requestedDays`
+   - If insufficient, the transaction rolls back and returns an error immediately
+4. **Atomically increments pendingDays** - The requested days are immediately reserved
+5. **Creates the request record** - Status set to `PENDING`
+6. **Commits the transaction** - Lock released, balance now reflects the reservation
+
+**Why pessimistic locking?**
+- Optimistic locking (version checks) would require retry logic when conflicts occur
+- Pessimistic locking serialized writes at the database level, guaranteeing no overdraft
+- The slight performance cost (other requests wait) is acceptable given the safety guarantee
 
 ### 6.3 HCM Webhook Processing (Idempotent)
 
-```typescript
-async processBalanceChanged(event: HcmBalanceEvent): Promise<void> {
-  // 1. Idempotency check
-  const existing = await this.syncLogRepo.findOne({ hcmEventId: event.eventId });
-  if (existing?.status === 'SUCCESS') return;  // Already processed
+**Purpose**: Keep local balances synchronized with HCM when HCM makes changes (e.g., work anniversary bonus days).
 
-  // 2. Timestamp ordering
-  const localBalance = await this.balanceRepo.findOne({...});
-  if (event.occurredAt < localBalance.hcmLastSyncedAt) {
-    await this.handleRetroactiveChange(localBalance, event);
-  } else {
-    await this.applyBalanceUpdate(localBalance, event);
-  }
-}
-```
+**How it works**:
+When HCM sends a `balance-changed` webhook event:
+
+1. **Idempotency Check**
+   - Every webhook event has a unique `eventId`
+   - Before processing, the system checks if this `eventId` was already processed (stored in `HcmSyncLog`)
+   - If `SUCCESS` status exists: skip processing (already handled)
+   - If `PENDING`/`RETRYING` status exists: return 200 but don't reprocess (deduplication)
+   - If new: create a `PENDING` log entry and proceed
+
+2. **Timestamp-Based Ordering**
+   - Events carry an `occurredAt` timestamp from HCM
+   - If `event.occurredAt < balance.hcmLastSyncedAt`: the event is older than our last known sync
+     - This is a **retroactive change** requiring special handling (e.g., anniversary was backdated)
+     - The system must recalculate impact on any existing pending/approved requests
+   - If `event.occurredAt >= balance.hcmLastSyncedAt`: normal forward update
+
+3. **Balance Update**
+   - The local balance is updated with HCM's new values
+   - `hcmLastSyncedAt` is set to the event's `occurredAt`
+   - Status is set to `SYNCED` (or `DRIFTED` if difference exceeds threshold)
+
+4. **Logging**
+   - The sync log entry is updated to `SUCCESS` with `processedAt` timestamp
+
+**Why idempotency matters**: Webhook delivery is not guaranteed to be exactly-once. Network retries may deliver the same event multiple times. The idempotency check ensures safe reprocessing.
 
 ### 6.4 Drift Detection (Scheduled)
 
-```yaml
-drift_detection:
-  schedule: "*/15 * * * *"  # Every 15 minutes
-  threshold: 0.5 days
-  critical_threshold: 2 days
-```
+**Purpose**: Actively detect when local balances have diverged from HCM, catching missed webhooks or HCM changes we didn't receive.
 
-### 6.5 Partial Failure Handling (Saga)
+**How it works**:
+A scheduled job runs every 15 minutes to:
 
-```typescript
-async executeApprovalSaga(requestId: string): Promise<void> {
-  try {
-    await this.step1_Approve(requestId);
-    await this.step2_PostToHcm(requestId);
-    await this.step3_UpdateBalanceUsed(requestId);
-    await this.step4_MarkCompleted(requestId);
-  } catch (error) {
-    if (error.atStep === 'HCM_POST') {
-      await this.requestRepo.update(requestId, { status: 'HCM_POST_FAILED' });
-      await this.conflictService.createTicket(requestId, error);
-    }
-  }
-}
-```
+1. **Query all balances** - Iterate through every local balance record
+2. **Call HCM for current value** - For each balance, query HCM's real-time API
+3. **Compare values** - Calculate the absolute difference between local and HCM
+4. **Classify the drift**:
+   - Difference <= 0.5 days: Within tolerance, no action
+   - Difference > 0.5 but <= 2 days: Mark as `DRIFTED`, alert for review
+   - Difference > 2 days: Mark as `CONFLICT`, escalate immediately
+5. **Generate report** - Provide operations team with a list of all drifts found
+
+**Why 0.5 and 2 day thresholds?**:
+- 0.5 days accounts for rounding differences and timing windows
+- 2 days flags potentially serious discrepancies that need urgent attention
+
+### 6.5 Approval Workflow and HCM Posting
+
+**Purpose**: Manage the lifecycle from employee request through manager approval to HCM notification.
+
+**How it works**:
+
+**Step 1: Manager Approval**
+- Manager retrieves pending approvals for their direct reports
+- Manager can approve or reject with optional comments
+- On approval: request status → `APPROVED`, `approvedAt` timestamp set
+- On rejection: request status → `REJECTED`, `rejectionReason` set, pending days released
+
+**Step 2: HCM Posting**
+- After approval, the system automatically posts to HCM
+- Uses idempotency key (the local request ID) to prevent duplicates
+- HCM responds with `CONFIRMED` or `REJECTED`
+- On `CONFIRMED`: request status → `HCM_POSTED`, `hcmRequestId` stored
+- On `REJECTED`: request status → `HCM_POST_FAILED`, conflict ticket created
+
+**Step 3: Request Completion**
+- When the time-off dates actually arrive (or via a scheduled job)
+- Pending days are moved to used days: `pendingDays -= days`, `usedDays += days`
+- Request status → `COMPLETED`
+
+### 6.6 Conflict Resolution
+
+**Purpose**: Handle cases where HCM and ReadyOn disagree, requiring manual intervention.
+
+**How it works**:
+When a conflict is detected (HCM rejects our post, or drift exceeds threshold):
+
+1. A `ConflictTicket` is created with:
+   - Type (e.g., `BALANCE_MISMATCH`, `HCM_POST_FAILURE`)
+   - The local balance vs. HCM balance
+   - The difference magnitude
+   - Resolution status: `PENDING_MANUAL`
+
+2. The ticket appears in an operations dashboard
+
+3. An analyst reviews and resolves by:
+   - Adjusting the local balance to match HCM, OR
+   - Manually posting to HCM with corrected data, OR
+   - Escalating to HR
+
+4. Resolution is recorded with `resolvedBy` and `resolvedAt` timestamps
+
+**Why manual resolution?**:
+- These are edge cases that automated systems shouldn't guess at
+- HR or management may need to make judgment calls (e.g., approving an exception)
+- Audit trail is important for compliance
+
+### 6.7 Batch Reconciliation
+
+**Purpose**: Catch any drift that webhooks missed, ensuring periodic full synchronization.
+
+**How it works**:
+A batch job can be triggered manually or on a schedule:
+
+1. **Fetch full corpus** from HCM's batch endpoint (returns all employee balances)
+2. **For each balance in HCM**:
+   - Find matching local balance by `employeeId` + `timeOffTypeId`
+   - If local doesn't exist: create it
+   - If local differs from HCM: apply HCM's value (using same drift logic)
+3. **For each local balance not in HCM corpus**:
+   - HCM may have deleted or archived the record
+   - Mark as `CONFLICT` for investigation
+4. **Report results**: processed count, failed count, drift summary
 
 ## 7. Defensive Programming Strategy
 
