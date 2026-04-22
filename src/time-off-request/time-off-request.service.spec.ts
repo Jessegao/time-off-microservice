@@ -281,6 +281,22 @@ describe('TimeOffRequestService', () => {
       expect(result.status).toBe(RequestStatus.HCM_POST_FAILED);
       expect(conflictRepo.create).toHaveBeenCalled();
     });
+
+    it('should set HCM_POST_UNKNOWN when HCM throws', async () => {
+      requestRepo.findOne.mockResolvedValue(mockRequest);
+      hcmClient.postTimeOffRequest.mockRejectedValue(new Error('HCM timeout'));
+      requestRepo.update.mockResolvedValue({ affected: 1 } as any);
+      requestRepo.save.mockImplementation(async (r) => r as TimeOffRequest);
+      syncLogRepo.create.mockReturnValue({} as any);
+      syncLogRepo.save.mockResolvedValue({} as any);
+
+      await expect(service.postToHcm('req-1')).rejects.toThrow('HCM timeout');
+
+      // Status should be HCM_POST_UNKNOWN so polling fallback can determine outcome
+      expect(requestRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: RequestStatus.HCM_POST_UNKNOWN }),
+      );
+    });
   });
 
   describe('getRequestById', () => {

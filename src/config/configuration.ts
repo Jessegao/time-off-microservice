@@ -17,4 +17,13 @@ export default () => ({
     criticalDriftThreshold: parseFloat(process.env.CRITICAL_DRIFT_THRESHOLD || '2'),
     batchSize: parseInt(process.env.SYNC_BATCH_SIZE || '100', 10),
   },
+  webhook: {
+    silenceThresholdMinutes: parseInt(process.env.WEBHOOK_SILENCE_THRESHOLD_MINUTES || '30', 10),
+    checkIntervalMinutes: parseInt(process.env.WEBHOOK_CHECK_INTERVAL_MINUTES || '5', 10),
+  },
+  polling: {
+    maxPollAttempts: parseInt(process.env.POLLING_MAX_ATTEMPTS || '5', 10),
+    intervalMinutes: parseInt(process.env.POLLING_INTERVAL_MINUTES || '5', 10),
+    initialDelayMinutes: parseInt(process.env.POLLING_INITIAL_DELAY_MINUTES || '2', 10),
+  },
 });

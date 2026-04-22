@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TimeOffRequest } from './entities/time-off-request.entity';
 import { TimeOffRequestService } from './time-off-request.service';
 import { TimeOffRequestController } from './time-off-request.controller';
+import { PollingFallbackService } from './polling-fallback.service';
 import { Balance } from '../balance/entities/balance.entity';
 import { Employee } from '../employee/entities/employee.entity';
 import { TimeOffType } from '../time-off-type/entities/time-off-type.entity';
@@ -25,7 +26,7 @@ import { HcmClientModule } from '../hcm/hcm-client/hcm.module';
     HcmClientModule,
   ],
   controllers: [TimeOffRequestController],
-  providers: [TimeOffRequestService],
+  providers: [TimeOffRequestService, PollingFallbackService],
   exports: [TimeOffRequestService],
 })
 export class TimeOffRequestModule {}

@@ -48,7 +48,7 @@ Employee ─────┬───── Balance ────── TimeOffTyp
 
 ### 4.3 Request Status Enum
 
-`DRAFT`, `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `HCM_POSTING`, `HCM_POSTED`, `HCM_POST_FAILED`, `COMPLETED`
+`DRAFT`, `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `HCM_POSTING`, `HCM_POSTED`, `HCM_POST_UNKNOWN`, `HCM_POST_FAILED`, `COMPLETED`
 
 ## 5. API Endpoints
 
@@ -247,6 +247,59 @@ A batch job can be triggered manually or on a schedule:
    - Mark as `CONFLICT` for investigation
 4. **Report results**: processed count, failed count, drift summary
 
+### 6.8 Polling Fallback
+
+**Purpose**: When an HCM POST times out or throws a network error, the system must determine whether HCM actually processed the request before rolling back locally. This addresses the "eventual consistency" challenge where the response is lost but the request may have been accepted.
+
+**How it works**:
+1. When `postToHcm` catches an exception, status becomes `HCM_POST_UNKNOWN` (not `HCM_POST_FAILED`)
+2. `PollingFallbackService` runs every 5 minutes, querying requests with status `HCM_POST_UNKNOWN`
+3. For each request older than 2 minutes (to allow HCM processing time), it polls `hcmClient.getRequestStatus()`
+4. If HCM confirms: status → `HCM_POSTED`
+5. If HCM rejects or after 5 polls still unknown: `cancelRequest` is called to release pending days, status → `HCM_POST_FAILED`, conflict ticket created
+
+**Why HCM_POST_UNKNOWN instead of immediate rollback?**
+If HCM processed the request but the response was lost in transit, rolling back would cause inconsistency. The polling approach waits for HCM's definitive answer.
+
+### 6.9 Webhook Health Monitoring
+
+**Purpose**: Detect when HCM stops sending webhook events due to delivery failures, so operations is alerted before drift detection catches it (15 min lag).
+
+**How it works**:
+1. `WebhookSilenceDetectorService` tracks `lastWebhookReceivedAt` per employee in an in-memory Map
+2. On every `BalanceChangedHandler.handle()` call, `updateWebhookReceived(employeeId)` is called
+3. A `@Cron` job runs every 5 minutes checking if any employee has gone >30 minutes (configurable) without a webhook
+4. If threshold exceeded: logs an error and creates a `WEBHOOK_SILENCE` conflict ticket
+
+**Why in-memory vs. persistent?**
+Webhook health is a transient operational concern. If the service restarts, the Map resets but webhooks will resume flowing. Persistent tracking would add unnecessary complexity.
+
+### 6.10 HCM Exception Rollback
+
+**Purpose**: Ensure pending day reservations are released when HCM throws an exception (vs. returning a definite REJECTED response), since we cannot confirm whether HCM accepted the request.
+
+**How it works**:
+- When `postToHcm` catches an exception: status → `HCM_POST_UNKNOWN` (polling fallback handles final disposition)
+- Rollback only happens after polling exhausts attempts (max 5 polls)
+- On max polls reached: `cancelRequest` is called to release pending days, conflict ticket created
+
+**Why not immediate rollback on exception?**
+If the exception is a network timeout, HCM may have processed the request. Immediate rollback would cause a double-decrement if HCM later confirms. The polling fallback provides definitive resolution.
+
+### 6.11 Stale Event Reprocessing
+
+**Purpose**: Handle retroactive balance changes from HCM (e.g., a work anniversary bonus backdated to a prior period) that arrive with an `occurredAt` older than our last sync timestamp.
+
+**How it works**:
+1. When a `balance-changed` webhook arrives with `occurredAt < balance.hcmLastSyncedAt`:
+   - A `ConflictTicket` with type `RETROACTIVE_CHANGE` is created, storing the original event payload
+   - The sync log is marked `FAILED` with error message indicating stale event
+2. An analyst can review and manually reprocess via `ConflictService.reprocessRetroactiveChange(ticketId)`
+3. The reprocess method re-applies the HCM update with the original `occurredAt` timestamp
+
+**Why store the payload?**
+The event data is needed for accurate reprocessing. The `effectiveDate` from HCM may differ from `occurredAt`, and both are preserved in the payload for correct resolution.
+
 ## 7. Defensive Programming Strategy
 
 ### 7.1 HCM Client Configuration
@@ -272,6 +325,37 @@ const HCM_CONFIG = {
 5. **Event deduplication** via hcmEventId in sync log
 6. **Circuit breaker** prevents cascade failures
 7. **Polling fallback** when HCM response lost
+8. **Webhook health monitoring** detects HCM silence
+9. **Conflict tickets** for manual HCM conflict resolution
+
+### 7.3 Configuration Parameters
+
+```typescript
+const CONFIG = {
+  sync: {
+    driftThreshold: 0.5,           // Days - normal drift tolerance
+    criticalDriftThreshold: 2.0,   // Days - escalated drift
+    batchSize: 100,                 // Employees per batch
+  },
+  webhook: {
+    silenceThresholdMinutes: 30,    // Alert if no webhook for this duration
+    checkIntervalMinutes: 5,        // Health check cron interval
+  },
+  polling: {
+    maxPollAttempts: 5,            // Max polls before marking failed
+    intervalMinutes: 5,              // Poll cron interval
+    initialDelayMinutes: 2,         // Wait before first poll (HCM processing time)
+  },
+  hcm: {
+    timeout: 5000,                  // ms
+    retries: 3,
+    circuitBreaker: {
+      failureThreshold: 5,
+      resetTimeout: 60000,
+    }
+  }
+};
+```
 
 ## 8. Analysis of Alternatives Considered
 
@@ -309,6 +393,22 @@ const HCM_CONFIG = {
 - submitRequest: insufficient balance rejection
 - submitRequest: pessimistic lock acquisition
 - cancelRequest: only cancellable states allowed
+- postToHcm: HCM exception → HCM_POST_UNKNOWN (polling fallback)
+- postToHcm: HCM rejection → HCM_POST_FAILED + conflict ticket
+
+**PollingFallbackService**
+- should not poll requests younger than initial delay
+- should update status to HCM_POSTED when HCM confirms
+- should mark as HCM_POST_FAILED after max poll attempts + create conflict ticket
+
+**WebhookSilenceDetectorService**
+- should track webhook timestamps per employee
+- should not create ticket when webhooks received within threshold
+- should create conflict ticket when no webhooks received beyond threshold
+
+**BalanceChangedHandler**
+- should create RETROACTIVE_CHANGE conflict ticket for stale events
+- should update webhook health on each event
 
 **HcmSyncService**
 - processBalanceWebhook: idempotency (duplicate events skipped)

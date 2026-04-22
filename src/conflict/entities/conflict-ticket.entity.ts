@@ -10,6 +10,7 @@ export enum ConflictType {
   BALANCE_MISMATCH = 'BALANCE_MISMATCH',
   HCM_POST_FAILURE = 'HCM_POST_FAILURE',
   RETROACTIVE_CHANGE = 'RETROACTIVE_CHANGE',
+  WEBHOOK_SILENCE = 'WEBHOOK_SILENCE',
 }
 
 export enum ConflictResolution {
@@ -56,6 +57,9 @@ export class ConflictTicket {
 
   @Column({ name: 'resolved_at', nullable: true })
   resolvedAt: Date | null;
+
+  @Column({ name: 'payload', type: 'simple-json', nullable: true })
+  payload: Record<string, any> | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

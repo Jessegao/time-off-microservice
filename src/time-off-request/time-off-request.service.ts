@@ -247,7 +247,9 @@ export class TimeOffRequestService {
 
       throw new Error(`Unknown HCM response status: ${hcmResponse.status}`);
     } catch (error) {
-      request.status = RequestStatus.HCM_POST_FAILED;
+      // HCM threw (timeout/network error) - set UNKNOWN so polling fallback can determine outcome
+      // Only rollback if polling eventually fails (handled by PollingFallbackService after max attempts)
+      request.status = RequestStatus.HCM_POST_UNKNOWN;
       await this.requestRepo.save(request);
 
       await this.syncLogRepo.update(syncLog.id, {

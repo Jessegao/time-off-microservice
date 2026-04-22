@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Balance, BalanceStatus, BalanceSource } from '../../../balance/entities/balance.entity';
@@ -6,6 +6,8 @@ import { Employee } from '../../../employee/entities/employee.entity';
 import { TimeOffType } from '../../../time-off-type/entities/time-off-type.entity';
 import { HcmSyncLog, SyncType, SyncDirection, SyncStatus } from '../../../sync-log/entities/hcm-sync-log.entity';
 import { BalanceService } from '../../../balance/balance.service';
+import { WebhookSilenceDetectorService } from '../../webhook-silence-detector.service';
+import { ConflictTicket, ConflictType } from '../../../conflict/entities/conflict-ticket.entity';
 
 export interface HcmBalanceChangedEvent {
   eventId: string;
@@ -31,11 +33,18 @@ export class BalanceChangedHandler {
     private readonly timeOffTypeRepo: Repository<TimeOffType>,
     @InjectRepository(HcmSyncLog)
     private readonly syncLogRepo: Repository<HcmSyncLog>,
+    @InjectRepository(ConflictTicket)
+    private readonly conflictRepo: Repository<ConflictTicket>,
     private readonly balanceService: BalanceService,
+    @Inject(forwardRef(() => WebhookSilenceDetectorService))
+    private readonly webhookSilenceDetector: WebhookSilenceDetectorService,
   ) {}
 
   async handle(event: HcmBalanceChangedEvent): Promise<void> {
     this.logger.log(`Processing balance changed event: ${event.eventId}`);
+
+    // Update webhook health tracking for monitoring
+    await this.webhookSilenceDetector.updateWebhookReceived(event.employeeId);
 
     const existingLog = await this.syncLogRepo.findOne({
       where: { hcmEventId: event.eventId },
@@ -108,6 +117,17 @@ export class BalanceChangedHandler {
 
       if (balance.hcmLastSyncedAt && occurredAt < balance.hcmLastSyncedAt) {
         this.logger.warn(`Stale event received: event time ${occurredAt} is older than last sync ${balance.hcmLastSyncedAt}`);
+
+        const conflict = this.conflictRepo.create({
+          type: ConflictType.RETROACTIVE_CHANGE,
+          balanceId: balance.id,
+          localBalance: Number(balance.availableDays),
+          hcmBalance: event.newBalance,
+          difference: Math.abs(Number(balance.availableDays) - event.newBalance),
+          payload: { event },
+        });
+        await this.conflictRepo.save(conflict);
+
         await this.syncLogRepo.update(syncLogId, {
           status: SyncStatus.FAILED,
           errorMessage: 'Stale event: older than last sync timestamp',
