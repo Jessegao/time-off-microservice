@@ -36,6 +36,24 @@ npm run start
 npm run start:dev
 ```
 
+## Docker
+
+```bash
+# Build the Docker image
+docker build -t time-off-service .
+
+# Run with docker-compose
+docker-compose up --build
+
+# Run the container
+docker run -p 3000:3000 \
+  -e PORT=3000 \
+  -e NODE_ENV=production \
+  time-off-service
+```
+
+The API will be available at `http://localhost:3000` with Swagger docs at `http://localhost:3000/api/docs`.
+
 ## Running Tests
 
 ```bash
