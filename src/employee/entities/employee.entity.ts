@@ -30,7 +30,7 @@ export class Employee {
   @Column()
   location: string;
 
-  @Column({ name: 'manager_id', nullable: true })
+  @Column({ name: 'manager_id', type: 'text', nullable: true })
   managerId: string | null;
 
   @Column({ name: 'hire_date', type: 'date' })

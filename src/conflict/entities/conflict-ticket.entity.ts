@@ -30,10 +30,10 @@ export class ConflictTicket {
   })
   type: ConflictType;
 
-  @Column({ name: 'request_id', nullable: true })
+  @Column({ name: 'request_id', type: 'text', nullable: true })
   requestId: string | null;
 
-  @Column({ name: 'balance_id', nullable: true })
+  @Column({ name: 'balance_id', type: 'text', nullable: true })
   balanceId: string | null;
 
   @Column({ name: 'local_balance', type: 'decimal', precision: 5, scale: 2 })
@@ -52,10 +52,10 @@ export class ConflictTicket {
   })
   resolution: ConflictResolution;
 
-  @Column({ name: 'resolved_by', nullable: true })
+  @Column({ name: 'resolved_by', type: 'text', nullable: true })
   resolvedBy: string | null;
 
-  @Column({ name: 'resolved_at', nullable: true })
+  @Column({ name: 'resolved_at', type: 'datetime', nullable: true })
   resolvedAt: Date | null;
 
   @Column({ name: 'payload', type: 'simple-json', nullable: true })

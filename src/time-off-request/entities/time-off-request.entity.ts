@@ -53,22 +53,22 @@ export class TimeOffRequest {
   })
   status: RequestStatus;
 
-  @Column({ name: 'hcm_request_id', unique: true, nullable: true })
+  @Column({ name: 'hcm_request_id', type: 'text', unique: true, nullable: true })
   hcmRequestId: string | null;
 
-  @Column({ name: 'rejection_reason', nullable: true })
+  @Column({ name: 'rejection_reason', type: 'text', nullable: true })
   rejectionReason: string | null;
 
-  @Column({ name: 'requested_at' })
+  @Column({ name: 'requested_at', type: 'datetime' })
   requestedAt: Date;
 
-  @Column({ name: 'approved_at', nullable: true })
+  @Column({ name: 'approved_at', type: 'datetime', nullable: true })
   approvedAt: Date | null;
 
-  @Column({ name: 'hcm_posted_at', nullable: true })
+  @Column({ name: 'hcm_posted_at', type: 'datetime', nullable: true })
   hcmPostedAt: Date | null;
 
-  @Column({ name: 'completed_at', nullable: true })
+  @Column({ name: 'completed_at', type: 'datetime', nullable: true })
   completedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

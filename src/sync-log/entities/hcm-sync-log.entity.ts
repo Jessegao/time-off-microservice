@@ -43,7 +43,7 @@ export class HcmSyncLog {
   })
   direction: SyncDirection;
 
-  @Column({ name: 'hcm_event_id', unique: true, nullable: true })
+  @Column({ name: 'hcm_event_id', type: 'text', unique: true, nullable: true })
   hcmEventId: string | null;
 
   @Column({ type: 'simple-json' })
@@ -59,10 +59,10 @@ export class HcmSyncLog {
   @Column({ name: 'retry_count', default: 0 })
   retryCount: number;
 
-  @Column({ name: 'error_message', nullable: true })
+  @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
 
-  @Column({ name: 'processed_at', nullable: true })
+  @Column({ name: 'processed_at', type: 'datetime', nullable: true })
   processedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

@@ -26,7 +26,7 @@ export class TimeOffType {
   @Column({ name: 'requires_approval', default: true })
   requiresApproval: boolean;
 
-  @Column({ name: 'max_consecutive_days', nullable: true })
+  @Column({ name: 'max_consecutive_days', type: 'integer', nullable: true })
   maxConsecutiveDays: number | null;
 
   @Column({ name: 'accrual_policy', type: 'simple-json' })

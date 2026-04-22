@@ -34,10 +34,10 @@ export class Approval {
   })
   status: ApprovalStatus;
 
-  @Column({ nullable: true })
+  @Column({ type: 'text', nullable: true })
   comments: string | null;
 
-  @Column({ name: 'decided_at', nullable: true })
+  @Column({ name: 'decided_at', type: 'datetime', nullable: true })
   decidedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

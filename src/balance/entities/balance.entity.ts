@@ -63,10 +63,10 @@ export class Balance {
   })
   source: BalanceSource;
 
-  @Column({ name: 'hcm_last_synced_at', nullable: true })
+  @Column({ name: 'hcm_last_synced_at', type: 'datetime', nullable: true })
   hcmLastSyncedAt: Date | null;
 
-  @Column({ name: 'last_known_hcm_hash', nullable: true })
+  @Column({ name: 'last_known_hcm_hash', type: 'text', nullable: true })
   lastKnownHcmHash: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
