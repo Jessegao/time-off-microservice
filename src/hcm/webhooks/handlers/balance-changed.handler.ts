@@ -6,7 +6,7 @@ import { Employee } from '../../../employee/entities/employee.entity';
 import { TimeOffType } from '../../../time-off-type/entities/time-off-type.entity';
 import { HcmSyncLog, SyncType, SyncDirection, SyncStatus } from '../../../sync-log/entities/hcm-sync-log.entity';
 import { BalanceService } from '../../../balance/balance.service';
-import { WebhookSilenceDetectorService } from '../../webhook-silence-detector.service';
+import { WebhookSilenceDetectorService } from '../webhook-silence-detector.service';
 import { ConflictTicket, ConflictType } from '../../../conflict/entities/conflict-ticket.entity';
 
 export interface HcmBalanceChangedEvent {
