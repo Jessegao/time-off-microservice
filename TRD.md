@@ -19,6 +19,7 @@ The Problem: Keeping balances synced between two systems is notoriously difficul
 
 - **Framework**: NestJS (TypeScript)
 - **Database**: SQLite (with TypeORM/better-sqlite3)
+- **Container**: Docker + docker-compose for local development and deployment
 - **Sync Strategy**: Event-driven with webhook subscriptions + batch reconciliation fallback
 - **Testing**: Jest (unit + integration), Mock HCM server
 

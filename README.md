@@ -17,6 +17,7 @@ This microservice handles the full lifecycle of time-off requests while maintain
 - **Framework**: NestJS (TypeScript)
 - **Database**: SQLite (better-sqlite3)
 - **ORM**: TypeORM
+- **Container**: Docker + docker-compose
 - **API Documentation**: Swagger/OpenAPI
 - **Testing**: Jest
 
@@ -39,13 +40,10 @@ npm run start:dev
 ## Docker
 
 ```bash
-# Build the Docker image
-docker build -t time-off-service .
-
-# Run with docker-compose
+# Build and run with docker-compose (includes the microservice)
 docker-compose up --build
 
-# Run the container
+# Run only the app container
 docker run -p 3000:3000 \
   -e PORT=3000 \
   -e NODE_ENV=production \
@@ -53,6 +51,20 @@ docker run -p 3000:3000 \
 ```
 
 The API will be available at `http://localhost:3000` with Swagger docs at `http://localhost:3000/api/docs`.
+
+## Docker Services
+
+The `docker-compose.yml` defines the following services:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `app` | 3000 | Time-Off Microservice |
+
+Start the service:
+
+```bash
+docker-compose up --build
+```
 
 ## Running Tests
 
@@ -129,24 +141,27 @@ http://localhost:3000/api/docs
 ## Project Structure
 
 ```
-src/
-├── main.ts
-├── app.module.ts
-├── config/                    # Configuration
-├── common/                    # Filters, guards, interceptors
-├── employee/                  # Employee entity and service
-├── time-off-type/            # Time-off type definitions
-├── balance/                   # Balance management
-├── time-off-request/          # Request lifecycle
-├── approval/                  # Approval workflow
-├── hcm/                       # HCM integration
-│   ├── hcm-client/           # HTTP client with retry logic
-│   ├── webhooks/             # Webhook handlers
-│   └── sync/                 # Drift detection, reconciliation
-├── sync-log/                  # Audit logging
-└── conflict/                  # Conflict resolution
-test/
-├── mock-hcm-server/          # Mock HCM server
+├── Dockerfile               # Multi-stage build for the microservice
+├── docker-compose.yml       # Service orchestration (app + mock HCM)
+├── .dockerignore            # Docker build exclusions
+├── src/
+│   ├── main.ts
+│   ├── app.module.ts
+│   ├── config/              # Configuration
+│   ├── common/              # Filters, guards, interceptors
+│   ├── employee/             # Employee entity and service
+│   ├── time-off-type/        # Time-off type definitions
+│   ├── balance/              # Balance management
+│   ├── time-off-request/     # Request lifecycle
+│   ├── approval/             # Approval workflow
+│   ├── hcm/                  # HCM integration
+│   │   ├── hcm-client/      # HTTP client with retry logic
+│   │   ├── webhooks/        # Webhook handlers
+│   │   └── sync/            # Drift detection, reconciliation
+│   ├── sync-log/             # Audit logging
+│   └── conflict/             # Conflict resolution
+├── test/
+│   └── mock-hcm-server/     # Mock HCM server
 └── fixtures/
 ```
 
