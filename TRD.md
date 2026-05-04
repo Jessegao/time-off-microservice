@@ -385,35 +385,84 @@ const CONFIG = {
 
 ### 9.1 Unit Tests
 
-**Balance Service**
-- calculateEffectiveAvailable: normal, zero, negative edge cases
-- applyHcmUpdate: preserves pending, detects drift
-- detectDrift: flags threshold exceeded, tolerance respected
+#### BalanceService (`src/balance/balance.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| `calculateEffectiveAvailable`: normal, zero, negative | Core calculation logic is critical for balance validation. Negative case ensures we catch pending-day overallocation. |
+| `getBalancesForEmployee`: valid employee, not found | Ensures proper error handling for invalid employee lookups. |
+| `validateBalanceForRequest`: sufficient, insufficient, not found | Defensive validation is the first line of defense against overdraft. |
+| `applyHcmUpdate`: within threshold, exceeds threshold, preserves pending | HCM updates are central to sync logic; threshold detection must be accurate. |
+| `incrementPendingDays`, `decrementPendingDays` | Reservation management is fundamental to request lifecycle. |
+| `moveToUsedDays`: normal flow, does not go below zero | Request completion moves days from pending to used; prevents negative balance bugs. |
+| `detectDrift`: flags exceeded threshold, within tolerance | Drift detection is a core defensive measure; thresholds must be precise. |
+| `reconcileBalance`: fetches HCM balance, not found | Individual balance reconciliation used by batch sync. |
 
-**TimeOffRequest Service**
-- submitRequest: insufficient balance rejection
-- submitRequest: pessimistic lock acquisition
-- cancelRequest: only cancellable states allowed
-- postToHcm: HCM exception → HCM_POST_UNKNOWN (polling fallback)
-- postToHcm: HCM rejection → HCM_POST_FAILED + conflict ticket
+#### TimeOffRequestService (`src/time-off-request/time-off-request.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| `createRequest`: creates with PENDING status, invalid employee throws | Request creation is the entry point for the workflow. |
+| `cancelRequest`: PENDING → CANCELLED, non-cancellable throws, not found | Cancel must only work for early-stage requests; must not allow cancellation of approved/HCM-posted requests. |
+| `postToHcm`: success → HCM_POSTED, rejection → HCM_POST_FAILED + conflict | HCM posting is where sync failures manifest; conflict tickets ensure observability. |
+| `postToHcm`: HCM exception → HCM_POST_UNKNOWN | Ensures polling fallback is triggered, not immediate failure. |
+| `getRequestById`: returns details, not found | Basic retrieval validation. |
 
-**PollingFallbackService**
-- should not poll requests younger than initial delay
-- should update status to HCM_POSTED when HCM confirms
-- should mark as HCM_POST_FAILED after max poll attempts + create conflict ticket
+#### PollingFallbackService (`src/time-off-request/polling-fallback.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| Should not poll requests younger than initial delay | Prevents premature polling before HCM processing time. |
+| Should update status to HCM_POSTED when HCM confirms | Positive confirmation path must work. |
+| Should mark as HCM_POST_FAILED after max poll attempts + create conflict ticket | Exhaustion path ensures cleanup and observability. |
+| Should handle getRequestStatus throwing exception gracefully | Network failures should not crash the polling job. |
+| Should use hcmRequestId for polling when available | Correct lookup key must be used. |
+| Should fall back to local request id when hcmRequestId is null | Ensures polling works even when HCM id not stored. |
+| Should increment poll attempts on each poll | Tracking attempt count is essential for the max-attempts logic. |
 
-**WebhookSilenceDetectorService**
-- should track webhook timestamps per employee
-- should not create ticket when webhooks received within threshold
-- should create conflict ticket when no webhooks received beyond threshold
+#### WebhookSilenceDetectorService (`src/hcm/webhooks/webhook-silence-detector.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| Should track webhook timestamp per employee | In-memory tracking must work correctly per employee. |
+| Should not create ticket when webhooks received within threshold | Normal operation should not trigger alerts. |
+| Should create conflict ticket when global webhook silence detected | Global silence indicates HCM-side failure; critical alert. |
+| Should create conflict ticket when employee has no webhooks beyond threshold | Per-employee tracking catches individual sync failures. |
 
-**BalanceChangedHandler**
-- should create RETROACTIVE_CHANGE conflict ticket for stale events
-- should update webhook health on each event
+#### BalanceChangedHandler (`src/hcm/webhooks/handlers/balance-changed.handler.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| Should skip already-processed events (idempotency) | Webhook delivery is at-least-once; must not double-process. |
+| Should update webhook health on each event | Silence detector depends on this being called. |
+| Should create RETROACTIVE_CHANGE conflict ticket for stale events | Backdated events require manual review per TRD section 6.11. |
+| Should handle employee, timeOffType, balance not found | Missing entities should be handled gracefully, not crash. |
+| Should call balanceService.applyHcmUpdate for valid events | Normal webhook processing must work end-to-end. |
+| Should handle exceptions and mark sync as failed | Errors must not block other events; failed events should be marked. |
 
-**HcmSyncService**
-- processBalanceWebhook: idempotency (duplicate events skipped)
-- processBalanceWebhook: out-of-order handling via timestamp
+#### ConflictService (`src/conflict/conflict.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| `createTicket`: creates with PENDING_MANUAL resolution, with/without requestId | Ticket creation is the entry point for manual resolution workflow. |
+| `findPendingTickets`: returns PENDING_MANUAL only, empty when none | Operations dashboard depends on this query. |
+| `resolveTicket`: throws if not found, sets AUTO_RESOLVED + metadata | Resolution must be tracked with who/when for audit. |
+| `reprocessRetroactiveChange`: returns false if not found, not RETROACTIVE_CHANGE, no payload; applies HCM update and resolves on success; returns false on apply failure | Manual reprocessing of backdated events is a critical recovery path. |
+
+#### SyncService (`src/hcm/sync/sync.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| `syncEmployee`: returns failed for not found, syncs all balances, handles reconcile errors | Single-employee sync is used by batch and manual triggers. |
+| `batchSync`: processes all active employees, counts failures, handles empty list | Batch reconciliation is the fallback sync mechanism. |
+| `detectDriftScheduled`: calls balanceService.detectDrift, handles errors gracefully | Scheduled job must not crash; errors should be logged. |
+| `getSyncLogs`: returns logs ordered by createdAt desc | Operations visibility into sync history. |
+
+#### ApprovalService (`src/approval/approval.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| `getPendingApprovalsForManager`: throws for invalid manager, returns empty when no direct reports | Manager dashboard query must handle edge cases. |
+| `approveRequest`: throws for invalid request | Basic validation. |
+| `rejectRequest`: throws for invalid request | Basic validation. |
+
+#### HcmClientService (`src/hcm/hcm-client/hcm-client.service.spec.ts`)
+| Test Case | Reason Included |
+|-----------|-----------------|
+| Should be defined | Basic initialization check. |
+| `healthCheck`: returns boolean | Health endpoint must return valid response. |
 
 ### 9.2 Integration Tests (Mock HCM Server)
 
@@ -427,6 +476,31 @@ const CONFIG = {
 | Duplicate webhook | Same eventId sent twice | Only processed once |
 | Concurrent requests | Two requests same employee | Second rejected at submit |
 | Drift detection | Local=10, HCM=8 | Balance flagged DRIFTED |
+
+### 9.3 Test File Inventory
+
+| Spec File | Line Count | Covered Service |
+|-----------|-----------|----------------|
+| `balance.service.spec.ts` | ~340 | BalanceService |
+| `time-off-request.service.spec.ts` | ~320 | TimeOffRequestService |
+| `polling-fallback.service.spec.ts` | ~160 | PollingFallbackService |
+| `webhook-silence-detector.service.spec.ts` | ~60 | WebhookSilenceDetectorService |
+| `balance-changed.handler.spec.ts` | ~250 | BalanceChangedHandler |
+| `conflict.service.spec.ts` | ~200 | ConflictService |
+| `sync.service.spec.ts` | ~180 | SyncService |
+| `approval.service.spec.ts` | ~150 | ApprovalService |
+| `hcm-client.service.spec.ts` | ~45 | HcmClientService |
+
+### 9.4 Edge Cases Covered
+
+1. **Negative effective balance**: `availableDays - pendingDays` can go negative when pending exceeds available
+2. **Decrement below zero**: Pending days and used days should never go negative
+3. **Stale webhook events**: Events with `occurredAt` older than last sync create RETROACTIVE_CHANGE tickets
+4. **Duplicate webhook delivery**: Same eventId processed only once via idempotency check
+5. **HCM exception → polling fallback**: Exceptions set HCM_POST_UNKNOWN, not immediate failure
+6. **Max polling attempts exhaustion**: After 5 polls without confirmation, request is cancelled and conflict ticket created
+7. **Webhook silence detection**: Both global and per-employee thresholds trigger conflict tickets
+8. **Batch sync partial failure**: Individual employee sync failures don't fail the entire batch
 
 ## 10. Project Structure
 

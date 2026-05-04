@@ -56,5 +56,37 @@ describe('WebhookSilenceDetectorService', () => {
 
       expect(conflictService.createTicket).not.toHaveBeenCalled();
     });
+
+    it('should create conflict ticket when global webhook silence detected', async () => {
+      // Simulate old global webhook by directly manipulating the map (bypass updateWebhookReceived)
+      const serviceAny = service as any;
+      serviceAny.globalLastWebhook = new Date(Date.now() - 60 * 60 * 1000); // 60 minutes ago
+
+      await service.checkWebhookHealth();
+
+      expect(conflictService.createTicket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: ConflictType.WEBHOOK_SILENCE,
+          localBalance: 0,
+          hcmBalance: 0,
+        }),
+      );
+    });
+
+    it('should create conflict ticket when employee has no webhooks beyond threshold', async () => {
+      // Simulate employee with old webhook
+      const serviceAny = service as any;
+      serviceAny.lastWebhookTime.set('emp-1', new Date(Date.now() - 60 * 60 * 1000)); // 60 minutes ago
+
+      await service.checkWebhookHealth();
+
+      expect(conflictService.createTicket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: ConflictType.WEBHOOK_SILENCE,
+          localBalance: 0,
+          hcmBalance: 0,
+        }),
+      );
+    });
   });
 });

@@ -340,4 +340,92 @@ describe('BalanceService', () => {
       expect(result.driftCount).toBe(0);
     });
   });
+
+  describe('moveToUsedDays', () => {
+    it('should move days from pending to used and decrement available', async () => {
+      const balanceWithPending = {
+        ...mockBalance,
+        pendingDays: 5,
+        usedDays: 2,
+        availableDays: 15,
+      };
+
+      // Mock transaction manager
+      const mockManager = {
+        findOne: jest.fn().mockResolvedValue(balanceWithPending),
+        update: jest.fn(),
+      };
+
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb: (manager: any) => Promise<unknown>) => {
+        return cb(mockManager);
+      });
+
+      await service.moveToUsedDays('balance-1', 3);
+
+      expect(mockManager.update).toHaveBeenCalledWith(Balance, 'balance-1', {
+        pendingDays: 2,
+        usedDays: 5,
+        availableDays: 12,
+      });
+    });
+
+    it('should not go below zero for pending days', async () => {
+      const balanceWithLowPending = {
+        ...mockBalance,
+        pendingDays: 2,
+        usedDays: 1,
+        availableDays: 15,
+      };
+
+      const mockManager = {
+        findOne: jest.fn().mockResolvedValue(balanceWithLowPending),
+        update: jest.fn(),
+      };
+
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb: (manager: any) => Promise<unknown>) => {
+        return cb(mockManager);
+      });
+
+      await service.moveToUsedDays('balance-1', 5);
+
+      expect(mockManager.update).toHaveBeenCalledWith(Balance, 'balance-1', {
+        pendingDays: 0,
+        usedDays: 6,
+        availableDays: 10,
+      });
+    });
+  });
+
+  describe('reconcileBalance', () => {
+    it('should fetch HCM balance and apply update', async () => {
+      const balanceWithRelations = {
+        ...mockBalance,
+        employee: mockEmployee,
+        timeOffType: mockTimeOffType,
+      };
+
+      balanceRepo.findOne.mockResolvedValue(balanceWithRelations);
+      hcmClient.getBalance.mockResolvedValue({
+        employeeId: 'HCM-001',
+        typeId: 'pto',
+        availableDays: 18,
+        totalDays: 22,
+        usedDays: 2,
+        pendingDays: 0,
+      });
+      balanceRepo.save.mockImplementation(async (b) => b as Balance);
+
+      const result = await service.reconcileBalance('emp-1', 'type-1');
+
+      expect(hcmClient.getBalance).toHaveBeenCalledWith('HCM-001', 'pto');
+      expect(result.availableDays).toBe(18);
+      expect(result.totalDays).toBe(22);
+    });
+
+    it('should throw NotFoundException when balance not found', async () => {
+      balanceRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.reconcileBalance('emp-1', 'type-1')).rejects.toThrow();
+    });
+  });
 });

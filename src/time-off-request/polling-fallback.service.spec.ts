@@ -119,5 +119,49 @@ describe('PollingFallbackService', () => {
       expect(requestRepo.update).toHaveBeenCalledWith('req-1', { status: RequestStatus.HCM_POST_FAILED });
       expect(conflictRepo.create).toHaveBeenCalled();
     });
+
+    it('should handle getRequestStatus throwing exception gracefully', async () => {
+      requestRepo.find.mockResolvedValue([mockRequest]);
+      hcmClient.getRequestStatus.mockRejectedValue(new Error('Network timeout'));
+
+      // Should not throw, just log and continue
+      await service.pollUnknownRequests();
+
+      // The request should remain in HCM_POST_UNKNOWN status since poll failed
+      expect(requestRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('should use hcmRequestId for polling when available', async () => {
+      const requestWithHcmId = { ...mockRequest, hcmRequestId: 'HCM-EXTERNAL-001' };
+      requestRepo.find.mockResolvedValue([requestWithHcmId]);
+      hcmClient.getRequestStatus.mockResolvedValue({ status: 'CONFIRMED', hcmId: 'HCM-EXTERNAL-001' });
+
+      await service.pollUnknownRequests();
+
+      expect(hcmClient.getRequestStatus).toHaveBeenCalledWith('HCM-EXTERNAL-001');
+    });
+
+    it('should fall back to local request id when hcmRequestId is null', async () => {
+      const requestWithoutHcmId = { ...mockRequest, hcmRequestId: null };
+      requestRepo.find.mockResolvedValue([requestWithoutHcmId]);
+      hcmClient.getRequestStatus.mockResolvedValue({ status: 'CONFIRMED', hcmId: 'req-1' });
+
+      await service.pollUnknownRequests();
+
+      expect(hcmClient.getRequestStatus).toHaveBeenCalledWith('req-1');
+    });
+
+    it('should increment poll attempts on each poll', async () => {
+      requestRepo.find.mockResolvedValue([mockRequest]);
+      hcmClient.getRequestStatus.mockResolvedValue({ status: 'PENDING' });
+
+      const serviceAny = service as any;
+
+      await service.pollUnknownRequests();
+      expect(serviceAny.pollAttempts.get('req-1')).toBe(1);
+
+      await service.pollUnknownRequests();
+      expect(serviceAny.pollAttempts.get('req-1')).toBe(2);
+    });
   });
 });
